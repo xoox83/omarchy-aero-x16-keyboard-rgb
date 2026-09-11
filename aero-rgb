@@ -14,13 +14,16 @@ import json
 import os
 import pathlib
 import signal
+import stat
 import sys
 import time
 
 VID = 0x0414
 PID = 0x8204
 PHYS_SUFFIX = "/input4"
-STATE_PATH = pathlib.Path.home() / ".config/aero-rgb/state.json"
+STATE_DIR = pathlib.Path.home() / ".config" / "aero-rgb"
+STATE_NAME = "state.json"
+MAX_STATE_BYTES = 4096
 
 # HID LampArray (usage page 0x59)
 REPORT_MULTIUPDATE = 0x04
@@ -29,7 +32,6 @@ REPORT_CONTROL = 0x06
 MULTIUPDATE_LEN = 51  # id + count + flags + 8×u16 ids + 8×RGBI
 RANGEUPDATE_LEN = 10  # id + flags + start + end + RGBI
 RGBI_OFFSET = 19      # 1 + 2 + 16
-LOG_PATH = pathlib.Path.home() / ".config/aero-rgb/last.log"
 
 NAMED = {
     "off": (0, 0, 0),
@@ -133,8 +135,6 @@ def apply_lamp(dev: pathlib.Path, r: int, g: int, b: int) -> None:
         raise SystemExit(f"HIDIOCSFEATURE failed on {dev}: {e}") from e
     finally:
         os.close(fd)
-    LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    LOG_PATH.write_text(f"{dev} range {r:02x}{g:02x}{b:02x}\n")
 
 
 def scale_rgb(r: int, g: int, b: int, pct: int) -> tuple[int, int, int]:
@@ -186,22 +186,96 @@ def parse_pct(text: str) -> int:
     return n
 
 
+def _open_state_dir() -> int:
+    STATE_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+    dir_fd = os.open(
+        str(STATE_DIR),
+        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+    )
+    try:
+        st = os.fstat(dir_fd)
+        if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid():
+            raise OSError("aero-rgb state dir is not a private directory")
+        os.fchmod(dir_fd, 0o700)
+        return dir_fd
+    except Exception:
+        os.close(dir_fd)
+        raise
+
+
 def load_state() -> dict:
     try:
-        return json.loads(STATE_PATH.read_text())
-    except (OSError, json.JSONDecodeError):
+        dir_fd = _open_state_dir()
+    except OSError:
         return {}
+    try:
+        fd = os.open(
+            STATE_NAME,
+            os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=dir_fd,
+        )
+    except OSError:
+        os.close(dir_fd)
+        return {}
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid():
+            return {}
+        if st.st_size > MAX_STATE_BYTES:
+            return {}
+        data = os.read(fd, MAX_STATE_BYTES + 1)
+        if len(data) > MAX_STATE_BYTES:
+            return {}
+        obj = json.loads(data.decode())
+        return obj if isinstance(obj, dict) else {}
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+        return {}
+    finally:
+        os.close(fd)
+        os.close(dir_fd)
 
 
 def save_state(r: int, g: int, b: int, brightness: int, mode: str = "static") -> None:
-    STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    STATE_PATH.write_text(
+    payload = (
         json.dumps(
             {"r": r, "g": g, "b": b, "brightness": brightness, "mode": mode},
             indent=2,
         )
         + "\n"
-    )
+    ).encode()
+    if len(payload) > MAX_STATE_BYTES:
+        raise SystemExit("state too large")
+    dir_fd = _open_state_dir()
+    tmp = f".state.{os.getpid()}.{os.urandom(8).hex()}.tmp"
+    fd = None
+    try:
+        fd = os.open(
+            tmp,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+            0o600,
+            dir_fd=dir_fd,
+        )
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid():
+            raise OSError("tmp is not a private regular file")
+        written = 0
+        while written < len(payload):
+            written += os.write(fd, payload[written:])
+        os.fsync(fd)
+        os.close(fd)
+        fd = None
+        os.rename(tmp, STATE_NAME, src_dir_fd=dir_fd, dst_dir_fd=dir_fd)
+        os.fsync(dir_fd)
+    except OSError as e:
+        if fd is not None:
+            os.close(fd)
+        try:
+            os.unlink(tmp, dir_fd=dir_fd)
+        except OSError:
+            pass
+        raise SystemExit(f"could not write state: {e}") from e
+    finally:
+        os.close(dir_fd)
 
 
 def hsv_rgb(h: float, s: float = 1.0, v: float = 1.0) -> tuple[int, int, int]:
@@ -279,7 +353,16 @@ def main() -> int:
     )
     parser.add_argument("--dry-run", action="store_true", help="print packet, do not send")
     parser.add_argument("--device", help="hidraw path (default: LampArray interface 4)")
+    parser.add_argument(
+        "--dump-state",
+        action="store_true",
+        help="print state.json to stdout via a no-follow private read",
+    )
     args = parser.parse_args()
+
+    if args.dump_state:
+        print(json.dumps(load_state(), separators=(",", ":")))
+        return 0
 
     state = load_state()
     src = args.brightness_opt or args.brightness

@@ -36,7 +36,10 @@ Panel {
       url = url.substring(7)
     return url
   }
-  readonly property string statePath: Quickshell.env("HOME") + "/.config/aero-rgb/state.json"
+  function refreshState() {
+    dumpProc.running = false
+    dumpProc.running = true
+  }
 
   function applyState(obj) {
     if (!obj) return
@@ -154,12 +157,18 @@ Panel {
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
-  FileView {
-    path: root.statePath
-    watchChanges: true
-    printErrors: false
-    onLoaded: root.applyState(Model.parseState(text()))
-    onFileChanged: reload()
+  Process {
+    id: dumpProc
+    command: ["/usr/bin/python3", root.bin, "--dump-state"]
+    stdout: StdioCollector {
+      id: dumpOut
+      waitForEnd: true
+    }
+    onRunningChanged: {
+      if (running)
+        return
+      root.applyState(Model.parseState(dumpOut.text))
+    }
   }
 
   Timer {
@@ -176,6 +185,7 @@ Panel {
     stdout: StdioCollector { waitForEnd: true }
     onRunningChanged: {
       if (running) return
+      root.refreshState()
       if (root.applyQueued) {
         root.applyQueued = false
         root.applyCommand(pendingColor, pendingBrightness)
@@ -185,7 +195,10 @@ Panel {
 
   Process {
     id: cycleProc
+    onRunningChanged: if (running) root.refreshState()
   }
+
+  Component.onCompleted: root.refreshState()
 
   Process {
     id: disableProc
