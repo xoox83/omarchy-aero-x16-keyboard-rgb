@@ -191,7 +191,7 @@ Panel {
 
   Process {
     id: disableProc
-    command: ["omarchy", "plugin", "disable", "xoox.aero-x16-rgb"]
+    command: ["/usr/bin/omarchy", "plugin", "disable", "xoox.aero-x16-rgb"]
   }
 
   BarIconButton {
