@@ -13,7 +13,9 @@ import fcntl
 import json
 import os
 import pathlib
+import signal
 import sys
+import time
 
 VID = 0x0414
 PID = 0x8204
@@ -191,18 +193,83 @@ def load_state() -> dict:
         return {}
 
 
-def save_state(r: int, g: int, b: int, brightness: int) -> None:
+def save_state(r: int, g: int, b: int, brightness: int, mode: str = "static") -> None:
     STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
     STATE_PATH.write_text(
-        json.dumps({"r": r, "g": g, "b": b, "brightness": brightness}, indent=2) + "\n"
+        json.dumps(
+            {"r": r, "g": g, "b": b, "brightness": brightness, "mode": mode},
+            indent=2,
+        )
+        + "\n"
     )
+
+
+def hsv_rgb(h: float, s: float = 1.0, v: float = 1.0) -> tuple[int, int, int]:
+    i = int(h * 6)
+    f = h * 6 - i
+    p, q, t = v * (1 - s), v * (1 - f * s), v * (1 - (1 - f) * s)
+    r, g, b = (
+        (v, t, p),
+        (q, v, p),
+        (p, v, t),
+        (p, q, v),
+        (t, p, v),
+        (v, p, q),
+    )[i % 6]
+    return int(r * 255), int(g * 255), int(b * 255)
+
+
+def run_cycle(dev: pathlib.Path, brightness: int, period: float = 8.0) -> None:
+    """Host-side hue cycle on the one-zone lamp. Stops on SIGTERM/SIGINT."""
+    state = load_state()
+    save_state(
+        int(state.get("r", 255)),
+        int(state.get("g", 255)),
+        int(state.get("b", 255)),
+        brightness,
+        mode="cycle",
+    )
+    stop = False
+
+    def halt(_signum, _frame):
+        nonlocal stop
+        stop = True
+
+    signal.signal(signal.SIGTERM, halt)
+    signal.signal(signal.SIGINT, halt)
+
+    fd = os.open(dev, os.O_RDWR)
+    try:
+        try:
+            set_feature_fd(fd, bytes([REPORT_CONTROL, 0]))
+        except OSError:
+            pass
+        t0 = time.time()
+        while not stop:
+            h = ((time.time() - t0) / period) % 1.0
+            r, g, b = hsv_rgb(h)
+            sr, sg, sb = scale_rgb(r, g, b, brightness)
+            set_feature_fd(fd, build_multiupdate(sr, sg, sb))
+            time.sleep(0.04)
+    except OSError as e:
+        if e.errno in (1, 13):
+            raise SystemExit(
+                f"permission denied on {dev}. Need udev 99-aero-rgb.rules (group wheel)."
+            ) from e
+        raise SystemExit(f"HIDIOCSFEATURE failed on {dev}: {e}") from e
+    finally:
+        os.close(fd)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Set the AERO X16 keyboard to one RGB colour (single zone)."
     )
-    parser.add_argument("color", nargs="?", help="hex (#1a6bff), R,G,B, or name (red/blue/off)")
+    parser.add_argument(
+        "color",
+        nargs="?",
+        help="hex (#1a6bff), R,G,B, name (red/blue/off), or cycle",
+    )
     parser.add_argument("brightness", nargs="?", help="0–100 percent")
     parser.add_argument(
         "-b",
@@ -217,6 +284,7 @@ def main() -> int:
     state = load_state()
     src = args.brightness_opt or args.brightness
     off = bool(args.color and args.color.strip().lower() in {"off", "black"})
+    cycle = bool(args.color and args.color.strip().lower() == "cycle")
 
     if args.color is None and src is None:
         parser.print_help()
@@ -226,6 +294,19 @@ def main() -> int:
                 f"{int(state.get('b',0)):02x}  brightness {int(state.get('brightness', 100))}%",
                 file=sys.stderr,
             )
+        return 0
+
+    if cycle:
+        if src is not None:
+            brightness = parse_pct(src)
+        else:
+            brightness = int(state.get("brightness", 100)) or 100
+        if args.dry_run:
+            print(f"cycle  brightness {brightness}%")
+            return 0
+        dev = pathlib.Path(args.device) if args.device else find_hidraw()
+        print(f"cycle via {dev}  brightness {brightness}%  (Ctrl-C to stop)")
+        run_cycle(dev, brightness)
         return 0
 
     if args.color is None:
@@ -253,7 +334,7 @@ def main() -> int:
 
     dev = pathlib.Path(args.device) if args.device else find_hidraw()
     apply_lamp(dev, sr, sg, sb)
-    save_state(r, g, b, 0 if off else brightness)
+    save_state(r, g, b, 0 if off else brightness, mode="off" if off else "static")
     print(f"sent via {dev}")
     return 0
 

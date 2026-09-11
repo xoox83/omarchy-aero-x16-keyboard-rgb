@@ -17,15 +17,18 @@ function hex(r, g, b) {
 }
 
 function parseState(text) {
-  var fallback = { r: 0, g: 80, b: 255, brightness: 100 }
+  var fallback = { r: 0, g: 80, b: 255, brightness: 100, mode: "static" }
   try {
     var o = JSON.parse(String(text || ""))
     if (!o || typeof o !== "object") return fallback
+    var mode = String(o.mode || "static")
+    if (mode !== "cycle" && mode !== "off") mode = "static"
     return {
       r: clamp(o.r, 0, 255),
       g: clamp(o.g, 0, 255),
       b: clamp(o.b, 0, 255),
-      brightness: clamp(o.brightness, 0, 100)
+      brightness: clamp(o.brightness, 0, 100),
+      mode: mode
     }
   } catch (e) {
     return fallback
@@ -34,15 +37,22 @@ function parseState(text) {
 
 function isOff(state) {
   if (!state) return true
+  if (state.mode === "cycle") return false
+  if (state.mode === "off") return true
   if (state.brightness <= 0) return true
   return state.r === 0 && state.g === 0 && state.b === 0
 }
 
-function swatchMatches(swatch, state) {
+function swatchActive(swatch, state, cycling) {
   if (!swatch || !state) return false
+  if (cycling || state.mode === "cycle") return false
   if (swatch.id === "off") return isOff(state)
   if (isOff(state)) return false
   return swatch.r === state.r && swatch.g === state.g && swatch.b === state.b
+}
+
+function isLight(r, g, b) {
+  return (Number(r) * 299 + Number(g) * 587 + Number(b) * 114) >= 140000
 }
 
 var swatches = [

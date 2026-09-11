@@ -21,6 +21,7 @@ Panel {
   property string focusSection: "colors"
   property int selectedIndex: 0
   property bool cursorActive: false
+  property bool cycling: false
 
   readonly property var swatches: Model.swatches
   readonly property bool lampOff: Model.isOff({
@@ -43,9 +44,28 @@ Panel {
     blue = obj.b
     brightnessPercent = obj.brightness
     pendingBrightness = obj.brightness
+    cycling = obj.mode === "cycle"
+  }
+
+  function stopCycle() {
+    if (cycleProc.running)
+      cycleProc.running = false
+    cycling = false
+  }
+
+  function startCycle() {
+    cycling = true
+    if (brightnessPercent <= 0)
+      brightnessPercent = 100
+    if (applyProc.running)
+      applyProc.running = false
+    cycleProc.running = false
+    cycleProc.command = ["/usr/bin/python3", bin, "cycle", String(brightnessPercent)]
+    cycleProc.running = true
   }
 
   function applyCommand(colorArg, brightnessArg) {
+    stopCycle()
     pendingBrightness = brightnessArg
     if (applyProc.running) {
       applyQueued = true
@@ -84,6 +104,10 @@ Panel {
     pendingBrightness = pct
     if (pct <= 0) {
       applyCommand("off", 0)
+      return
+    }
+    if (cycling) {
+      startCycle()
       return
     }
     if (red === 0 && green === 0 && blue === 0) {
@@ -162,6 +186,10 @@ Panel {
   }
 
   Process {
+    id: cycleProc
+  }
+
+  Process {
     id: disableProc
     command: ["omarchy", "plugin", "disable", "xoox.aero-x16-rgb"]
   }
@@ -172,7 +200,7 @@ Panel {
     bar: root.bar
     text: "󰌌"
     dimmed: root.lampOff
-    tooltipText: root.lampOff ? "Gigabyte Aero X16 · off" : "Gigabyte Aero X16 · " + root.currentHex + " · " + root.brightnessPercent + "%"
+    tooltipText: root.cycling ? "Gigabyte Aero X16 · cycle" : (root.lampOff ? "Gigabyte Aero X16 · off" : "Gigabyte Aero X16 · " + root.currentHex + " · " + root.brightnessPercent + "%")
     iconComponent: Component {
       OpticalGlyph {
         anchors.fill: parent
@@ -253,7 +281,7 @@ Panel {
             }
 
             Text {
-              text: root.lampOff ? "OFF" : (root.currentHex + "  " + root.brightnessPercent + "%").toUpperCase()
+              text: root.cycling ? ("CYCLE  " + root.brightnessPercent + "%") : (root.lampOff ? "OFF" : (root.currentHex + "  " + root.brightnessPercent + "%").toUpperCase())
               color: Qt.darker(root.bar.foreground, 1.4)
               font.family: root.bar.fontFamily
               font.pixelSize: Style.font.caption
@@ -306,23 +334,32 @@ Panel {
                 outline: true
 
                 Rectangle {
+                  id: swatchFill
                   anchors.fill: parent
                   anchors.margins: Style.space(6)
                   radius: Style.space(6)
+                  readonly property bool active: Model.swatchActive(modelData, {
+                    r: root.red, g: root.green, b: root.blue, brightness: root.brightnessPercent, mode: root.cycling ? "cycle" : "static"
+                  }, root.cycling)
                   color: modelData.id === "off" ? "#111111" : Qt.rgba(modelData.r / 255, modelData.g / 255, modelData.b / 255, 1)
-                  border.width: Model.swatchMatches(modelData, {
-                    r: root.red, g: root.green, b: root.blue, brightness: root.brightnessPercent
-                  }) ? 2 : 1
-                  border.color: Model.swatchMatches(modelData, {
-                    r: root.red, g: root.green, b: root.blue, brightness: root.brightnessPercent
-                  }) ? root.bar.foreground : Qt.darker(root.bar.foreground, 1.8)
+                  border.width: active ? 3 : 1
+                  border.color: active ? root.bar.foreground : Qt.darker(root.bar.foreground, 1.8)
 
                   Text {
-                    visible: modelData.id === "off"
+                    visible: modelData.id === "off" && !swatchFill.active
                     anchors.centerIn: parent
                     text: "✕"
                     color: root.bar.foreground
                     font.pixelSize: Style.font.caption
+                    font.bold: true
+                  }
+
+                  Text {
+                    visible: swatchFill.active
+                    anchors.centerIn: parent
+                    text: "✓"
+                    color: (modelData.id === "off" || !Model.isLight(modelData.r, modelData.g, modelData.b)) ? "#ffffff" : "#111111"
+                    font.pixelSize: Style.font.body
                     font.bold: true
                   }
                 }
@@ -339,6 +376,21 @@ Panel {
                   onTapped: root.setSwatch(modelData)
                 }
               }
+            }
+          }
+
+          Button {
+            width: parent.width
+            text: root.cycling ? "Cycle  ✓" : "Cycle"
+            tooltipText: "Rainbow cycle on the whole keyboard"
+            bordered: true
+            foreground: root.bar.foreground
+            fontFamily: root.bar.fontFamily
+            onClicked: {
+              if (root.cycling)
+                root.applyCommand(Model.hex(root.red, root.green, root.blue), Math.max(root.brightnessPercent, 1))
+              else
+                root.startCycle()
             }
           }
         }

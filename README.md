@@ -42,6 +42,7 @@ The same helper the panel uses:
 ~/.config/omarchy/plugins/xoox.aero-x16-rgb/aero-rgb white
 ~/.config/omarchy/plugins/xoox.aero-x16-rgb/aero-rgb '#1a6bff' 80
 ~/.config/omarchy/plugins/xoox.aero-x16-rgb/aero-rgb off
+~/.config/omarchy/plugins/xoox.aero-x16-rgb/aero-rgb cycle
 ```
 
 ## Requirements
