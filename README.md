@@ -7,7 +7,7 @@ Set colour and brightness from the bar. It talks to the keyboard over **HID Lamp
 ## Install
 
 ```bash
-omarchy plugin add https://github.com/REPLACE_ME/omarchy-aero-x16-keyboard-rgb.git --enable
+omarchy plugin add https://github.com/xoox83/omarchy-aero-x16-keyboard-rgb.git --enable
 ```
 
 Then give your user access to the keyboard hidraw nodes (once):
