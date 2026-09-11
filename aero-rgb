@@ -1,0 +1,265 @@
+#!/usr/bin/env python3
+"""One-zone RGB for the Gigabyte AERO X16 keyboard (USB 0414:8204).
+
+The board is a single HID LampArray lamp (interface 4 / …/input4).
+The older Aorus 8-byte vendor report on interface 3 turns this firmware off —
+do not use it.
+"""
+
+from __future__ import annotations
+
+import argparse
+import fcntl
+import json
+import os
+import pathlib
+import sys
+
+VID = 0x0414
+PID = 0x8204
+PHYS_SUFFIX = "/input4"
+STATE_PATH = pathlib.Path.home() / ".config/aero-rgb/state.json"
+
+# HID LampArray (usage page 0x59)
+REPORT_MULTIUPDATE = 0x04
+REPORT_RANGEUPDATE = 0x05
+REPORT_CONTROL = 0x06
+MULTIUPDATE_LEN = 51  # id + count + flags + 8×u16 ids + 8×RGBI
+RANGEUPDATE_LEN = 10  # id + flags + start + end + RGBI
+RGBI_OFFSET = 19      # 1 + 2 + 16
+LOG_PATH = pathlib.Path.home() / ".config/aero-rgb/last.log"
+
+NAMED = {
+    "off": (0, 0, 0),
+    "black": (0, 0, 0),
+    "white": (255, 255, 255),
+    "red": (255, 0, 0),
+    "green": (0, 255, 0),
+    "blue": (0, 80, 255),
+    "cyan": (0, 200, 220),
+    "magenta": (220, 0, 180),
+    "yellow": (255, 200, 0),
+    "orange": (255, 120, 0),
+    "purple": (140, 0, 255),
+}
+
+
+def hid_ioc(nr: int, length: int) -> int:
+    return 0xC0000000 | (length << 16) | (ord("H") << 8) | nr
+
+
+def find_hidraw() -> pathlib.Path:
+    root = pathlib.Path("/sys/class/hidraw")
+    if not root.is_dir():
+        raise SystemExit("no /sys/class/hidraw")
+    hid_id = f"HID_ID=0003:{VID:08X}:{PID:08X}"
+    found: list[tuple[str, str]] = []
+    for node in sorted(root.glob("hidraw*")):
+        uevent = (node / "device" / "uevent").read_text()
+        if hid_id not in uevent:
+            continue
+        phys = ""
+        for line in uevent.splitlines():
+            if line.startswith("HID_PHYS="):
+                phys = line.split("=", 1)[1]
+        found.append((phys, node.name))
+        if phys.endswith(PHYS_SUFFIX):
+            return pathlib.Path("/dev") / node.name
+    if found:
+        hint = ", ".join(f"{name} ({phys})" for phys, name in found)
+        raise SystemExit(f"0414:8204 found, but not LampArray (…{PHYS_SUFFIX}): {hint}")
+    raise SystemExit("Gigabyte keyboard 0414:8204 not found")
+
+
+def set_feature_fd(fd: int, data: bytes) -> None:
+    buf = bytearray(data)
+    fcntl.ioctl(fd, hid_ioc(0x06, len(buf)), buf, True)
+
+
+def set_feature(dev: pathlib.Path, data: bytes) -> None:
+    fd = os.open(dev, os.O_RDWR)
+    try:
+        set_feature_fd(fd, data)
+    except OSError as e:
+        if e.errno in (1, 13):
+            raise SystemExit(
+                f"permission denied on {dev}. Need udev 99-aero-rgb.rules (group wheel)."
+            ) from e
+        raise SystemExit(f"HIDIOCSFEATURE failed on {dev}: {e}") from e
+    finally:
+        os.close(fd)
+
+
+def build_rangeupdate(r: int, g: int, b: int) -> bytes:
+    # LampRangeUpdate: flags, lampIdStart, lampIdEnd, RGBI
+    return bytes(
+        [
+            REPORT_RANGEUPDATE,
+            1,  # LampUpdateComplete
+            0,
+            0,  # start lamp 0
+            0,
+            0,  # end lamp 0
+            r & 0xFF,
+            g & 0xFF,
+            b & 0xFF,
+            0xFF,
+        ]
+    )
+
+
+def apply_lamp(dev: pathlib.Path, r: int, g: int, b: int) -> None:
+    """Take host control once, then set the single lamp via range + multi update.
+
+    Re-sending AutonomousMode=0 on a *closed* fd every invocation was enough
+    to make ioctl succeed while the firmware kept the previous colour.
+    Keep the fd open and send range-update (the 1-zone report) last.
+    """
+    fd = os.open(dev, os.O_RDWR)
+    try:
+        try:
+            set_feature_fd(fd, bytes([REPORT_CONTROL, 0]))
+        except OSError:
+            pass
+        set_feature_fd(fd, build_multiupdate(r, g, b))
+        set_feature_fd(fd, build_rangeupdate(r, g, b))
+    except OSError as e:
+        if e.errno in (1, 13):
+            raise SystemExit(
+                f"permission denied on {dev}. Need udev 99-aero-rgb.rules (group wheel)."
+            ) from e
+        raise SystemExit(f"HIDIOCSFEATURE failed on {dev}: {e}") from e
+    finally:
+        os.close(fd)
+    LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    LOG_PATH.write_text(f"{dev} range {r:02x}{g:02x}{b:02x}\n")
+
+
+def scale_rgb(r: int, g: int, b: int, pct: int) -> tuple[int, int, int]:
+    pct = max(0, min(100, pct))
+    return (round(r * pct / 100), round(g * pct / 100), round(b * pct / 100))
+
+
+def build_multiupdate(r: int, g: int, b: int) -> bytes:
+    rpt = bytearray(MULTIUPDATE_LEN)
+    rpt[0] = REPORT_MULTIUPDATE
+    rpt[1] = 1  # one lamp
+    rpt[2] = 1  # LampUpdateComplete
+    # lamp id 0 at offset 3, remaining 7 ids stay 0
+    rpt[RGBI_OFFSET] = r & 0xFF
+    rpt[RGBI_OFFSET + 1] = g & 0xFF
+    rpt[RGBI_OFFSET + 2] = b & 0xFF
+    rpt[RGBI_OFFSET + 3] = 0xFF  # intensity; this lamp reports 1 level
+    return bytes(rpt)
+
+
+def parse_color(text: str) -> tuple[int, int, int]:
+    t = text.strip().lower()
+    if t in NAMED:
+        return NAMED[t]
+    if t.startswith("#"):
+        t = t[1:]
+    if "," in t:
+        parts = [p.strip() for p in t.split(",")]
+        if len(parts) != 3:
+            raise SystemExit("expected R,G,B")
+        rgb = (int(parts[0]), int(parts[1]), int(parts[2]))
+    elif len(t) == 6 and all(c in "0123456789abcdef" for c in t):
+        rgb = (int(t[0:2], 16), int(t[2:4], 16), int(t[4:6], 16))
+    else:
+        raise SystemExit(f"unknown colour: {text}")
+    if any(c < 0 or c > 255 for c in rgb):
+        raise SystemExit("RGB values must be 0–255")
+    return rgb
+
+
+def parse_pct(text: str) -> int:
+    t = text.strip().rstrip("%")
+    try:
+        n = int(t)
+    except ValueError as e:
+        raise SystemExit("brightness must be 0–100") from e
+    if n < 0 or n > 100:
+        raise SystemExit("brightness must be 0–100")
+    return n
+
+
+def load_state() -> dict:
+    try:
+        return json.loads(STATE_PATH.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def save_state(r: int, g: int, b: int, brightness: int) -> None:
+    STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    STATE_PATH.write_text(
+        json.dumps({"r": r, "g": g, "b": b, "brightness": brightness}, indent=2) + "\n"
+    )
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Set the AERO X16 keyboard to one RGB colour (single zone)."
+    )
+    parser.add_argument("color", nargs="?", help="hex (#1a6bff), R,G,B, or name (red/blue/off)")
+    parser.add_argument("brightness", nargs="?", help="0–100 percent")
+    parser.add_argument(
+        "-b",
+        "--brightness",
+        dest="brightness_opt",
+        help="0–100 percent (keeps last colour if no colour given)",
+    )
+    parser.add_argument("--dry-run", action="store_true", help="print packet, do not send")
+    parser.add_argument("--device", help="hidraw path (default: LampArray interface 4)")
+    args = parser.parse_args()
+
+    state = load_state()
+    src = args.brightness_opt or args.brightness
+    off = bool(args.color and args.color.strip().lower() in {"off", "black"})
+
+    if args.color is None and src is None:
+        parser.print_help()
+        if state:
+            print(
+                f"\nlast: #{int(state.get('r',0)):02x}{int(state.get('g',0)):02x}"
+                f"{int(state.get('b',0)):02x}  brightness {int(state.get('brightness', 100))}%",
+                file=sys.stderr,
+            )
+        return 0
+
+    if args.color is None:
+        r = int(state.get("r", 0))
+        g = int(state.get("g", 0))
+        b = int(state.get("b", 0))
+    else:
+        r, g, b = parse_color(args.color)
+
+    if src is not None:
+        brightness = parse_pct(src)
+    elif off:
+        brightness = 0
+    else:
+        brightness = 100
+
+    sr, sg, sb = scale_rgb(r, g, b, 0 if off else brightness)
+
+    print(
+        f"#{r:02x}{g:02x}{b:02x}  brightness {0 if off else brightness}%  "
+        f"lamp {sr:02x}{sg:02x}{sb:02x}"
+    )
+    if args.dry_run:
+        return 0
+
+    dev = pathlib.Path(args.device) if args.device else find_hidraw()
+    apply_lamp(dev, sr, sg, sb)
+    save_state(r, g, b, 0 if off else brightness)
+    print(f"sent via {dev}")
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except KeyboardInterrupt:
+        raise SystemExit(130)

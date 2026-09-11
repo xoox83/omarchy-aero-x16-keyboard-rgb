@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "staffan.aero-rgb",
+  "name": "Gigabyte Aero X16: Keyboard RGB",
+  "version": "1.0.0",
+  "author": "Staffan Palmér",
+  "license": "MIT",
+  "description": "One-zone RGB colour and brightness for the Gigabyte AERO X16 keyboard (HID LampArray).",
+  "kinds": ["bar-widget"],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Keyboard RGB",
+    "description": "Set the laptop keyboard colour and brightness.",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}

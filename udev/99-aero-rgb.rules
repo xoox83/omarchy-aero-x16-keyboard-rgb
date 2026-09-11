@@ -1,0 +1,2 @@
+# Gigabyte AERO X16 built-in keyboard RGB (USB 0414:8204)
+KERNEL=="hidraw*", ATTRS{idVendor}=="0414", ATTRS{idProduct}=="8204", MODE="0660", GROUP="wheel", TAG+="uaccess"
