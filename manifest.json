@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
-  "id": "staffan.aero-rgb",
+  "id": "xoox.aero-x16-rgb",
   "name": "Gigabyte Aero X16: Keyboard RGB",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "author": "Staffan Palmér",
   "license": "MIT",
   "description": "One-zone RGB colour and brightness for the Gigabyte AERO X16 keyboard (HID LampArray).",

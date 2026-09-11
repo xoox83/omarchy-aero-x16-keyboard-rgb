@@ -13,7 +13,7 @@ omarchy plugin add https://github.com/xoox83/omarchy-aero-x16-keyboard-rgb.git -
 Then give your user access to the keyboard hidraw nodes (once):
 
 ```bash
-sudo install -m 644 ~/.config/omarchy/plugins/staffan.aero-rgb/udev/99-aero-rgb.rules /etc/udev/rules.d/
+sudo install -m 644 ~/.config/omarchy/plugins/xoox.aero-x16-rgb/udev/99-aero-rgb.rules /etc/udev/rules.d/
 sudo udevadm control --reload-rules
 sudo udevadm trigger -s hidraw --action=add
 ```
@@ -29,7 +29,7 @@ The plugin appears on the right of the bar. Click the keyboard icon.
 ## Remove
 
 ```bash
-omarchy plugin remove staffan.aero-rgb
+omarchy plugin remove xoox.aero-x16-rgb
 sudo rm -f /etc/udev/rules.d/99-aero-rgb.rules
 sudo udevadm control --reload-rules
 ```
@@ -39,9 +39,9 @@ sudo udevadm control --reload-rules
 The same helper the panel uses:
 
 ```bash
-~/.config/omarchy/plugins/staffan.aero-rgb/aero-rgb white
-~/.config/omarchy/plugins/staffan.aero-rgb/aero-rgb '#1a6bff' 80
-~/.config/omarchy/plugins/staffan.aero-rgb/aero-rgb off
+~/.config/omarchy/plugins/xoox.aero-x16-rgb/aero-rgb white
+~/.config/omarchy/plugins/xoox.aero-x16-rgb/aero-rgb '#1a6bff' 80
+~/.config/omarchy/plugins/xoox.aero-x16-rgb/aero-rgb off
 ```
 
 ## Requirements

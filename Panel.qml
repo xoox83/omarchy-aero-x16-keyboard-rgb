@@ -8,8 +8,8 @@ import "Model.js" as Model
 
 Panel {
   id: root
-  moduleName: "staffan.aero-rgb"
-  ipcTarget: "staffan.aero-rgb"
+  moduleName: "xoox.aero-x16-rgb"
+  ipcTarget: "xoox.aero-x16-rgb"
 
   property int red: 0
   property int green: 80
@@ -163,7 +163,7 @@ Panel {
 
   Process {
     id: disableProc
-    command: ["omarchy", "plugin", "disable", "staffan.aero-rgb"]
+    command: ["omarchy", "plugin", "disable", "xoox.aero-x16-rgb"]
   }
 
   BarIconButton {
