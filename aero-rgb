@@ -211,7 +211,7 @@ def load_state() -> dict:
     try:
         fd = os.open(
             STATE_NAME,
-            os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
+            os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
             dir_fd=dir_fd,
         )
     except OSError:
@@ -333,6 +333,13 @@ def run_cycle(dev: pathlib.Path, brightness: int, period: float = 8.0) -> None:
         raise SystemExit(f"HIDIOCSFEATURE failed on {dev}: {e}") from e
     finally:
         os.close(fd)
+    save_state(
+        int(state.get("r", 255)),
+        int(state.get("g", 255)),
+        int(state.get("b", 255)),
+        brightness,
+        mode="static",
+    )
 
 
 def main() -> int:

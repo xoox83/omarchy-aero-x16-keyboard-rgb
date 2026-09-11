@@ -484,6 +484,7 @@ Panel {
           foreground: root.bar.foreground
           fontFamily: root.bar.fontFamily
           onClicked: {
+            root.stopCycle()
             root.close()
             disableProc.running = true
           }
