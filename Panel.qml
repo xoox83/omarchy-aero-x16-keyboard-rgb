@@ -346,7 +346,7 @@ Panel {
                   Text {
                     visible: modelData.id === "off" && !swatchFill.active
                     anchors.centerIn: parent
-                    text: "✕"
+                    text: "Off"
                     color: root.bar.foreground
                     font.pixelSize: Style.font.caption
                     font.bold: true
