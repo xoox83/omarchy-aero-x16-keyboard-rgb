@@ -25,7 +25,8 @@ Panel {
 
   readonly property var swatches: Model.swatches
   readonly property bool lampOff: Model.isOff({
-    r: red, g: green, b: blue, brightness: brightnessPercent
+    r: red, g: green, b: blue, brightness: brightnessPercent,
+    mode: cycling ? "cycle" : (brightnessPercent <= 0 ? "off" : "static")
   })
   readonly property string currentHex: Model.hex(red, green, blue)
   readonly property color lampColor: Qt.rgba(red / 255, green / 255, blue / 255, 1)
@@ -84,9 +85,6 @@ Panel {
   function setSwatch(swatch) {
     if (!swatch) return
     if (swatch.id === "off") {
-      red = 0
-      green = 0
-      blue = 0
       brightnessPercent = 0
       applyCommand("off", 0)
       return

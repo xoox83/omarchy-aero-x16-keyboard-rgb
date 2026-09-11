@@ -296,6 +296,14 @@ def main() -> int:
             )
         return 0
 
+    def remembered_rgb() -> tuple[int, int, int]:
+        r0 = int(state.get("r", 0))
+        g0 = int(state.get("g", 0))
+        b0 = int(state.get("b", 0))
+        if r0 == g0 == b0 == 0:
+            return NAMED["blue"]
+        return r0, g0, b0
+
     if cycle:
         if src is not None:
             brightness = parse_pct(src)
@@ -309,19 +317,18 @@ def main() -> int:
         run_cycle(dev, brightness)
         return 0
 
-    if args.color is None:
-        r = int(state.get("r", 0))
-        g = int(state.get("g", 0))
-        b = int(state.get("b", 0))
+    if off:
+        r, g, b = remembered_rgb()
+        brightness = 0
+    elif args.color is None:
+        r, g, b = remembered_rgb()
+        brightness = parse_pct(src) if src is not None else int(state.get("brightness", 100))
     else:
         r, g, b = parse_color(args.color)
-
-    if src is not None:
-        brightness = parse_pct(src)
-    elif off:
-        brightness = 0
-    else:
-        brightness = 100
+        if src is not None:
+            brightness = parse_pct(src)
+        else:
+            brightness = 100
 
     sr, sg, sb = scale_rgb(r, g, b, 0 if off else brightness)
 
