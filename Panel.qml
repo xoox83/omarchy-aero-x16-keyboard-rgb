@@ -16,15 +16,13 @@ Panel {
   property int blue: 255
   property int brightnessPercent: 100
   property int pendingBrightness: 100
-  property bool applyQueued: false
   property real wheelAccumulator: 0
   property string focusSection: "colors"
   property int selectedIndex: 0
   property bool cursorActive: false
   property bool cycling: false
-  property bool cycleRestartQueued: false
-  property int pendingCycleBrightness: 100
   property bool dumpRestartQueued: false
+  property var pendingLaunch: null
   readonly property var subprocessEnv: ({
     "HOME": Quickshell.env("HOME"),
     "PATH": "/usr/bin:/bin"
@@ -61,17 +59,40 @@ Panel {
     cycling = obj.mode === "cycle"
   }
 
-  function requestCycleStop() {
-    if (!cycleProc.running)
+  // applyProc and cycleProc both open the same HID device and write the same
+  // state file, so they must never run at once. Every path that starts
+  // either one goes through runExclusive(), which stops both (TERM, then a
+  // watchdog KILL if either refuses to die) and only invokes the launcher
+  // once neither is running any more.
+  function bothIdle() {
+    return !applyProc.running && !cycleProc.running
+  }
+
+  function requestStop(proc, watchdog) {
+    if (!proc.running)
       return
-    cycleStopWatchdog.restart()
-    cycleProc.running = false
+    watchdog.restart()
+    proc.running = false
+  }
+
+  function tryPendingLaunch() {
+    if (!pendingLaunch || !bothIdle())
+      return
+    var launch = pendingLaunch
+    pendingLaunch = null
+    launch()
+  }
+
+  function runExclusive(launch) {
+    pendingLaunch = launch
+    requestStop(applyProc, applyStopWatchdog)
+    requestStop(cycleProc, cycleStopWatchdog)
+    tryPendingLaunch()
   }
 
   function stopCycle() {
     cycling = false
-    cycleRestartQueued = false
-    requestCycleStop()
+    requestStop(cycleProc, cycleStopWatchdog)
   }
 
   function launchCycle(brightness) {
@@ -83,36 +104,20 @@ Panel {
     cycling = true
     if (brightnessPercent <= 0)
       brightnessPercent = 100
-    if (applyProc.running)
-      applyProc.running = false
-    pendingCycleBrightness = brightnessPercent
-    if (cycleProc.running) {
-      // Wait for the previous cycle process to actually exit (TERM, then a
-      // watchdog KILL if it doesn't) before starting the replacement — two
-      // `aero-rgb cycle` processes racing on the same device/state file at
-      // once is exactly the kind of overlap a plain stop+restart risks.
-      cycleRestartQueued = true
-      requestCycleStop()
-      return
-    }
-    launchCycle(brightnessPercent)
+    var brightness = brightnessPercent
+    runExclusive(function() { launchCycle(brightness) })
   }
 
   function applyCommand(colorArg, brightnessArg) {
-    stopCycle()
+    cycling = false
     pendingBrightness = brightnessArg
-    if (applyProc.running) {
-      applyQueued = true
-      applyProc.pendingColor = colorArg
-      applyProc.pendingBrightness = brightnessArg
-      return
-    }
-    applyProc.running = false
-    if (colorArg === "off")
-      applyProc.command = ["/usr/bin/python3", "-I", bin, "off"]
-    else
-      applyProc.command = ["/usr/bin/python3", "-I", bin, colorArg.replace("#", ""), String(brightnessArg)]
-    applyProc.running = true
+    runExclusive(function() {
+      if (colorArg === "off")
+        applyProc.command = ["/usr/bin/python3", "-I", bin, "off"]
+      else
+        applyProc.command = ["/usr/bin/python3", "-I", bin, colorArg.replace("#", ""), String(brightnessArg)]
+      applyProc.running = true
+    })
   }
 
   function setSwatch(swatch) {
@@ -226,8 +231,6 @@ Panel {
 
   Process {
     id: applyProc
-    property string pendingColor: ""
-    property int pendingBrightness: 100
     clearEnvironment: true
     environment: root.subprocessEnv
     stdout: StdioCollector { waitForEnd: true }
@@ -237,17 +240,22 @@ Panel {
         return
       }
       applyWatchdog.stop()
+      applyStopWatchdog.stop()
       root.refreshState()
-      if (root.applyQueued) {
-        root.applyQueued = false
-        root.applyCommand(pendingColor, pendingBrightness)
-      }
+      root.tryPendingLaunch()
     }
   }
 
   Timer {
     id: applyWatchdog
     interval: 5000
+    repeat: false
+    onTriggered: if (applyProc.running) applyProc.signal(9)
+  }
+
+  Timer {
+    id: applyStopWatchdog
+    interval: 1500
     repeat: false
     onTriggered: if (applyProc.running) applyProc.signal(9)
   }
@@ -262,10 +270,7 @@ Panel {
         return
       }
       cycleStopWatchdog.stop()
-      if (root.cycleRestartQueued) {
-        root.cycleRestartQueued = false
-        root.launchCycle(root.pendingCycleBrightness)
-      }
+      root.tryPendingLaunch()
     }
   }
 

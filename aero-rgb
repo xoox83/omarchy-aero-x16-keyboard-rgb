@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
 """One-zone RGB for the Gigabyte AERO X16 keyboard (USB 0414:8204).
 
 The board is a single HID LampArray lamp (interface 4 / …/input4).
