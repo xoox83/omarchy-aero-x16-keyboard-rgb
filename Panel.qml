@@ -212,15 +212,6 @@ Panel {
     text: "󰌌"
     dimmed: root.lampOff
     tooltipText: root.cycling ? "Gigabyte Aero X16 · cycle" : (root.lampOff ? "Gigabyte Aero X16 · off" : "Gigabyte Aero X16 · " + root.currentHex + " · " + root.brightnessPercent + "%")
-    iconComponent: Component {
-      OpticalGlyph {
-        anchors.fill: parent
-        text: "󰌌"
-        color: root.lampOff ? button.foreground : root.lampColor
-        fontFamily: button.fontFamily
-        fontSize: button.fontSize
-      }
-    }
     onPressed: function() { root.toggle() }
     onWheelMoved: function(delta) {
       var wheel = Util.wheelSteps(root.wheelAccumulator, delta)
