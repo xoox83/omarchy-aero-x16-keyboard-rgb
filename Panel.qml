@@ -22,6 +22,13 @@ Panel {
   property int selectedIndex: 0
   property bool cursorActive: false
   property bool cycling: false
+  property bool cycleRestartQueued: false
+  property int pendingCycleBrightness: 100
+  property bool dumpRestartQueued: false
+  readonly property var subprocessEnv: ({
+    "HOME": Quickshell.env("HOME"),
+    "PATH": "/usr/bin:/bin"
+  })
 
   readonly property var swatches: Model.swatches
   readonly property bool lampOff: Model.isOff({
@@ -37,7 +44,10 @@ Panel {
     return url
   }
   function refreshState() {
-    dumpProc.running = false
+    if (dumpProc.running) {
+      dumpRestartQueued = true
+      return
+    }
     dumpProc.running = true
   }
 
@@ -51,10 +61,22 @@ Panel {
     cycling = obj.mode === "cycle"
   }
 
+  function requestCycleStop() {
+    if (!cycleProc.running)
+      return
+    cycleStopWatchdog.restart()
+    cycleProc.running = false
+  }
+
   function stopCycle() {
-    if (cycleProc.running)
-      cycleProc.running = false
     cycling = false
+    cycleRestartQueued = false
+    requestCycleStop()
+  }
+
+  function launchCycle(brightness) {
+    cycleProc.command = ["/usr/bin/python3", "-I", bin, "cycle", String(brightness)]
+    cycleProc.running = true
   }
 
   function startCycle() {
@@ -63,9 +85,17 @@ Panel {
       brightnessPercent = 100
     if (applyProc.running)
       applyProc.running = false
-    cycleProc.running = false
-    cycleProc.command = ["/usr/bin/python3", bin, "cycle", String(brightnessPercent)]
-    cycleProc.running = true
+    pendingCycleBrightness = brightnessPercent
+    if (cycleProc.running) {
+      // Wait for the previous cycle process to actually exit (TERM, then a
+      // watchdog KILL if it doesn't) before starting the replacement — two
+      // `aero-rgb cycle` processes racing on the same device/state file at
+      // once is exactly the kind of overlap a plain stop+restart risks.
+      cycleRestartQueued = true
+      requestCycleStop()
+      return
+    }
+    launchCycle(brightnessPercent)
   }
 
   function applyCommand(colorArg, brightnessArg) {
@@ -79,9 +109,9 @@ Panel {
     }
     applyProc.running = false
     if (colorArg === "off")
-      applyProc.command = ["/usr/bin/python3", bin, "off"]
+      applyProc.command = ["/usr/bin/python3", "-I", bin, "off"]
     else
-      applyProc.command = ["/usr/bin/python3", bin, colorArg.replace("#", ""), String(brightnessArg)]
+      applyProc.command = ["/usr/bin/python3", "-I", bin, colorArg.replace("#", ""), String(brightnessArg)]
     applyProc.running = true
   }
 
@@ -159,16 +189,32 @@ Panel {
 
   Process {
     id: dumpProc
-    command: ["/usr/bin/python3", root.bin, "--dump-state"]
+    command: ["/usr/bin/python3", "-I", root.bin, "--dump-state"]
+    clearEnvironment: true
+    environment: root.subprocessEnv
     stdout: StdioCollector {
       id: dumpOut
       waitForEnd: true
     }
     onRunningChanged: {
-      if (running)
+      if (running) {
+        dumpWatchdog.restart()
         return
+      }
+      dumpWatchdog.stop()
       root.applyState(Model.parseState(dumpOut.text))
+      if (root.dumpRestartQueued) {
+        root.dumpRestartQueued = false
+        root.refreshState()
+      }
     }
+  }
+
+  Timer {
+    id: dumpWatchdog
+    interval: 4000
+    repeat: false
+    onTriggered: if (dumpProc.running) dumpProc.signal(9)
   }
 
   Timer {
@@ -182,9 +228,15 @@ Panel {
     id: applyProc
     property string pendingColor: ""
     property int pendingBrightness: 100
+    clearEnvironment: true
+    environment: root.subprocessEnv
     stdout: StdioCollector { waitForEnd: true }
     onRunningChanged: {
-      if (running) return
+      if (running) {
+        applyWatchdog.restart()
+        return
+      }
+      applyWatchdog.stop()
       root.refreshState()
       if (root.applyQueued) {
         root.applyQueued = false
@@ -193,9 +245,35 @@ Panel {
     }
   }
 
+  Timer {
+    id: applyWatchdog
+    interval: 5000
+    repeat: false
+    onTriggered: if (applyProc.running) applyProc.signal(9)
+  }
+
   Process {
     id: cycleProc
-    onRunningChanged: if (running) root.refreshState()
+    clearEnvironment: true
+    environment: root.subprocessEnv
+    onRunningChanged: {
+      if (running) {
+        root.refreshState()
+        return
+      }
+      cycleStopWatchdog.stop()
+      if (root.cycleRestartQueued) {
+        root.cycleRestartQueued = false
+        root.launchCycle(root.pendingCycleBrightness)
+      }
+    }
+  }
+
+  Timer {
+    id: cycleStopWatchdog
+    interval: 1500
+    repeat: false
+    onTriggered: if (cycleProc.running) cycleProc.signal(9)
   }
 
   Component.onCompleted: root.refreshState()
@@ -203,6 +281,20 @@ Panel {
   Process {
     id: disableProc
     command: ["/usr/bin/omarchy", "plugin", "disable", "xoox.aero-x16-rgb"]
+    onRunningChanged: {
+      if (running) {
+        disableWatchdog.restart()
+        return
+      }
+      disableWatchdog.stop()
+    }
+  }
+
+  Timer {
+    id: disableWatchdog
+    interval: 5000
+    repeat: false
+    onTriggered: if (disableProc.running) disableProc.signal(9)
   }
 
   BarIconButton {
