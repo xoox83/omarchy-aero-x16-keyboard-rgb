@@ -10,12 +10,17 @@ Set colour and brightness from the bar. It talks to the keyboard over **HID Lamp
 omarchy plugin add https://github.com/xoox83/omarchy-aero-x16-keyboard-rgb.git --enable
 ```
 
-Then give your user access to the keyboard hidraw nodes (once). This writes a
-**built-in allowlisted** udev rule as root — it does not copy files from the
-plugin directory:
+Then give your user access to the keyboard hidraw nodes (once). Paste this rule
+literally into a root shell — root only ever sees the two lines below, typed
+here, not any file read from the plugin directory:
 
 ```bash
-sudo /usr/bin/python3 -I ~/.config/omarchy/plugins/xoox.aero-x16-rgb/aero-rgb --install-udev
+sudo tee /etc/udev/rules.d/99-aero-rgb.rules >/dev/null <<'EOF'
+# Gigabyte AERO X16 built-in keyboard RGB (USB 0414:8204)
+KERNEL=="hidraw*", ATTRS{idVendor}=="0414", ATTRS{idProduct}=="8204", MODE="0660", GROUP="wheel", TAG+="uaccess"
+EOF
+sudo udevadm control --reload-rules
+sudo udevadm trigger -s hidraw --action=add
 ```
 
 If hidraw permissions do not update, log out and in. Do not chmod `/dev/hidraw*`.
@@ -26,10 +31,10 @@ The plugin appears on the right of the bar. Click the keyboard icon.
 
 ```bash
 omarchy plugin remove xoox.aero-x16-rgb
-sudo /usr/bin/python3 -I ~/.config/omarchy/plugins/xoox.aero-x16-rgb/aero-rgb --remove-udev
+sudo rm -f /etc/udev/rules.d/99-aero-rgb.rules
+sudo udevadm control --reload-rules
+sudo udevadm trigger -s hidraw --action=add
 ```
-
-`--remove-udev` only deletes the rule if it still matches the allowlisted bytes.
 
 ## CLI
 
